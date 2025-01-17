@@ -1,0 +1,429 @@
+import random
+import numpy as np
+
+class Event:
+    def __init__(self, event_time, event_type):
+        self.event_time = event_time
+        self.event_type = event_type
+
+    def __lt__(self, other):
+        return self.event_time < other.event_time
+
+    def handle(self, queue):
+         print("Handle method must be implemented by subclasses")
+         pass
+
+
+class ArrivalEvent(Event):
+    def __init__(self, event_time):
+        super().__init__(event_time, "Arrival")
+
+    def handle(self, queue):
+        """מטפל בהגעת לקוח חדש."""
+        # תזמון הגעה הבאה
+        next_arrival_time = self.event_time + np.random.exponential(1 / queue.arrival_rate)
+        if next_arrival_time < queue.simulation_end_time:
+            queue.schedule_event(ArrivalEvent(next_arrival_time))
+
+        # יצירת לקוח חדש
+        group_type = random.choices(["family", "couple", "single"], [0.4, 0.4, 0.2])[0]
+        if group_type == "family":
+            group_size = random.choices([4, 5, 3], [0.2, 0.5, 0.3])[0]
+        elif group_type == "couple":
+            group_size = 2
+        else:
+            group_size = 1
+
+
+        guest = Guest(len(queue.customers) + 1, "Guest", group_type, group_size, random.randint(1, 5))
+        queue.customers.append(guest)
+
+        # חיפוש חדר פנוי
+        for room in queue.rooms:
+            if not room.is_occupied and room.capacity >= guest.group_size:
+                room.check_in()
+                guest.check_in(room)
+                print(f"Guest {guest.guest_id} checked into room {room.room_id}.")
+                break
+        else:
+            # אם אין חדר פנוי, הוספת האורח לרשימת המתנה
+            queue.waiting_list.append(guest)
+            print(f"Guest {guest.guest_id} added to waiting list.")
+
+class CheckInEvent(Event):
+    def __init__(self, event_time, guest):
+        super().__init__(event_time, "CheckIn")
+        self.guest = guest
+
+    def handle(self, queue):
+        """מטפל בתהליך הצ'ק-אין."""
+        if not (15 * 60 <= self.event_time <= 20 * 60):  # זמן בדקות (15:00–20:00)
+            print(f"Check-in not allowed for Guest {self.guest.guest_id} at this time.")
+            return
+
+        # חיפוש חדר פנוי
+        for room in queue.rooms:
+            if not room.is_occupied and room.capacity >= self.guest.group_size:
+                room.check_in()
+                self.guest.check_in(room)
+                print(f"Guest {self.guest.guest_id} checked into room {room.room_id}.")
+                return
+
+        # אם אין חדר פנוי, הוספת האורח לרשימת המתנה
+        queue.waiting_list.append(self.guest)
+        print(f"No available rooms for Guest {self.guest.guest_id}. Added to waiting list.")
+
+        delay_time = self.event_time - self.guest.arrival_time  # הזמן שעבר מאז הגעת האורח
+        if delay_time > 30:  # מעל חצי שעה
+            queue.hotel_rating = max(0, queue.hotel_rating - 0.02)
+            print(f"Rating decreased to {queue.hotel_rating:.2f} due to delayed check-in.")
+
+        # טיפול ברשימת המתנה אם חדר מתפנה
+        self.process_waiting_list(queue)
+
+    def process_waiting_list(self, simulation):
+        """מטפל ברשימת ההמתנה כאשר חדר מתפנה."""
+        for guest in simulation.waiting_list:
+            for room in simulation.rooms:
+                if not room.is_occupied and room.capacity >= guest.group_size:
+                    room.check_in()
+                    guest.check_in(room)
+                    simulation.waiting_list.remove(guest)
+                    print(f"Guest {guest.guest_id} moved from waiting list to room {room.room_id}.")
+                    break
+
+class CheckOutEvent(Event):
+    def __init__(self, event_time, guest):
+        super().__init__(event_time, "CheckOut")
+        self.guest = guest
+
+    def handle(self, simulation):
+        """מטפל בתהליך הצ'ק-אאוט."""
+
+        if not (7.5 * 60 <= self.event_time <= 11 * 60):  # זמן בדקות
+            print(f"Check-out not allowed for Guest {self.guest.guest_id} at this time.")
+            return
+
+        if self.guest.room:
+            # שחרור החדר
+            self.guest.room.check_out()
+            print(f"Guest {self.guest.guest_id} checked out from room {self.guest.room.room_id}.")
+            self.guest.check_out()
+
+            # בדיקת רשימת ההמתנה והקצאת חדרים
+            for waiting_guest in simulation.waiting_list:
+                if not self.guest.room.is_occupied and waiting_guest.group_size <= self.guest.room.capacity:
+                    self.guest.room.check_in()
+                    waiting_guest.check_in(self.guest.room)
+                    simulation.waiting_list.remove(waiting_guest)
+                    print(f"Guest {waiting_guest.guest_id} moved from waiting list to room {self.guest.room.room_id}.")
+                    break
+            else:
+                print(f"No suitable guests in waiting list for room {self.guest.room.room_id}.")
+
+
+
+
+
+
+
+
+
+
+
+
+# -*- coding: utf-8 -*-
+"""פרויקט סימולציה מעודכן חלקית .ipynb
+
+Automatically generated by Colab.
+
+Original file is located at
+    https://colab.research.google.com/drive/1RxXXVnfZAAjD2lUmvQx16KwIWuI4H26A
+"""
+
+class Room:
+    def __init__(self, room_number, room_type, capacity):
+        """
+        אתחול החדר עם מאפיינים מסוימים.
+        :param room_number: מזהה ייחודי לחדר.
+        :param room_type: סוג החדר (למשל, 'suite', 'family_large', 'couple').
+        :param capacity: הקיבולת המרבית של החדר.
+        """
+        self.room_number = room_number  # מזהה ייחודי.
+        self.room_type = room_type  # סוג החדר.
+        self.capacity = capacity  # הקיבולת המרבית.
+        self.occupied = False  # האם החדר תפוס כרגע?
+        self.is_clean = True  # האם החדר נקי?
+        self.days_occupied = 0  # מספר הימים שהחדר תפוס.
+        self.ratings = []  # דירוגים מהאורחים ששהו בחדר.
+
+    def check_in(self):
+        """מסמן את החדר כתפוס כאשר אורח עושה צ'ק-אין."""
+        if self.occupied:
+            raise ValueError(f"Room {self.room_number} is already occupied.")
+        self.occupied = True
+        print(f"Room {self.room_number} is now occupied.")
+
+    def check_out(self):
+        """מסמן את החדר כלא תפוס כאשר אורח עושה צ'ק-אאוט."""
+        if not self.occupied:
+            raise ValueError(f"Room {self.room_number} is already vacant.")
+        self.occupied = False
+        self.days_occupied = 0  # איפוס מספר הימים שהחדר תפוס.
+        print(f"Room {self.room_number} is now vacant.")
+
+    def clean_room(self):
+        """מנקה את החדר ומסמן אותו כמוכן לאורחים חדשים."""
+        if self.occupied:
+            print(f"Cannot clean room {self.room_number} while it is occupied.")
+            return
+        self.is_clean = True
+        print(f"Room {self.room_number} cleaned.")
+
+    def add_rating(self, rating):
+        """מוסיף דירוג לחדר מאורח."""
+        if rating < 0 or rating > 10:
+            raise ValueError("Rating must be between 0 and 10.")
+        self.ratings.append(rating)
+        print(f"Added rating {rating} for room {self.room_number}.")
+
+    def average_rating(self):
+        """מחשב את הדירוג הממוצע של החדר."""
+        return sum(self.ratings) / len(self.ratings) if self.ratings else 0
+
+    def cleaning_generator(self):
+        """
+        גנרטור לניהול משימות ניקיון עבור חדר זה.
+        """
+        while True:
+            if not self.occupied and not self.is_clean:
+                print(f"Room {self.room_number} is ready for cleaning.")
+                yield self.clean_room()
+            else:
+                print(f"Room {self.room_number} is not ready for cleaning.")
+                yield None
+
+    def get_status(self):
+        """מחזיר את המצב הנוכחי של החדר."""
+        return {
+
+
+class HotelSimulation:
+    """
+    מחלקה לניהול סימולציית המלון.
+    """
+
+    def __init__(self, arrival_rate, service_rate, simulation_end_time, hotel):
+        """
+        אתחול הסימולציה.
+        :param arrival_rate: קצב הגעת אורחים.
+        :param service_rate: קצב שירות.
+        :param simulation_end_time: זמן סיום הסימולציה (בדקות).
+        :param hotel: אובייקט המלון.
+        """
+        self.arrival_rate = arrival_rate
+        self.service_rate = service_rate
+        self.simulation_end_time = simulation_end_time
+        self.hotel = hotel
+
+        self.event_list = []  # רשימת אירועים עתידיים
+        self.check_in_queue = []  # תור צ'ק אין
+
+        self.statistics = {
+            "total_customers": 0,
+            "total_service_time": 0,
+            "total_wait_time": 0,
+            "daily_ratings": [],
+        }
+
+    def schedule_event(self, event_time, event_type, **kwargs):
+        """
+        תזמון אירוע חדש.
+        :param event_time: זמן האירוע.
+        :param event_type: סוג האירוע.
+        :param kwargs: פרמטרים נוספים לאירוע.
+        """
+        self.event_list.append({
+            "time": event_time,
+            "type": event_type,
+            "details": kwargs,
+        })
+        self.event_list.sort(key=lambda x: x["time"])
+
+    def run(self):
+        """
+        הפעלת הסימולציה.
+        """
+        current_time = 0
+
+        while self.event_list:
+            event = self.event_list.pop(0)
+            current_time = event["time"]
+
+            if current_time > self.simulation_end_time:
+                break
+
+            print(f"Handling event: {event['type']} at time {current_time}.")
+            if event["type"] == "arrival":
+                self.handle_arrival(event["details"])
+            elif event["type"] == "checkout":
+                self.handle_checkout(event["details"])
+            elif event["type"] == "rating_update":
+                self.update_daily_rating()
+            elif event["type"] == "activity":
+                self.handle_activity(event["details"])
+
+    def handle_arrival(self, details):
+        """
+        טיפול בהגעת אורח.
+        :param details: פרטי האורח.
+        """
+        guest = details["guest"]
+        room = self.hotel.allocate_room(guest)
+
+        if room:
+            guest.check_in(room)
+            self.statistics["total_customers"] += 1
+            print(f"Guest {guest.guest_id} checked into room {room.room_number}.")
+            self.schedule_event(
+                event_time=random.expovariate(1 / self.service_rate),
+                event_type="activity",
+                guest=guest,
+            )
+        else:
+            self.check_in_queue.append(guest)
+            print(f"Guest {guest.guest_id} added to check-in queue.")
+
+    def handle_checkout(self, details):
+        """
+        טיפול בצ'ק-אאוט של אורח.
+        :param details: פרטי החדר.
+        """
+        room = details["room"]
+        self.hotel.housekeeping.handle_guest_checkout(room)
+        print(f"Room {room.room_number} is now ready for cleaning.")
+
+    def update_daily_rating(self):
+        """
+        עדכון דירוג יומי של המלון.
+        """
+        daily_rating = self.hotel.calculate_daily_rating()
+        self.statistics["daily_ratings"].append(daily_rating)
+        self.arrival_rate = max(1, daily_rating * 2)  # עדכון קצב הגעת אורחים
+        print(f"Daily rating updated to {daily_rating:.2f}. New arrival rate: {self.arrival_rate}.")
+
+    def handle_activity(self, details):
+        """
+        טיפול בפעילויות אורחים.
+        :param details: פרטי האורח.
+        """
+        guest = details["guest"]
+        activity = self.hotel.schedule_activity(guest)
+        if activity:
+            print(f"Guest {guest.guest_id} is now enjoying {activity}.")
+            if activity == "breakfast":
+                self.hotel.breakfast.seat_guests(guest.group_size)
+            elif activity == "pool":
+                self.hotel.pool.enter_pool(guest.group_size)
+            elif activity == "spa":
+                self.hotel.spa.enter_salt_pool(guest.group_size)
+
+    def calculate_statistics(self):
+        """
+        חישוב סטטיסטיקות הסימולציה.
+        :return: מילון עם נתונים סטטיסטיים.
+        """
+        total_customers = self.statistics["total_customers"]
+        avg_service_time = (
+            self.statistics["total_service_time"] / total_customers
+            if total_customers > 0 else 0
+        )
+        avg_wait_time = (
+            self.statistics["total_wait_time"] / total_customers
+            if total_customers > 0 else 0
+        )
+        avg_rating = (
+            sum(self.statistics["daily_ratings"]) / len(self.statistics["daily_ratings"])
+            if self.statistics["daily_ratings"] else 0
+        )
+
+        return {
+            "Total Customers": total_customers,
+            "Average Service Time": avg_service_time,
+            "Average Wait Time": avg_wait_time,
+            "Average Rating": avg_rating,
+        }
+
+    def print_statistics(self):
+        """
+        מדפיס את נתוני הסימולציה.
+        """
+        stats = self.calculate_statistics()
+        print("Simulation Statistics:")
+        for key, value in stats.items():
+            print(f"{key}: {value}")
+
+    def process_check_in_queue(self):
+        """
+        מעבד את תור הצ'ק-אין כאשר חדרים מתפנים.
+        """
+        while self.check_in_queue:
+            guest = self.check_in_queue.pop(0)
+            room = self.hotel.allocate_room(guest)
+            if room:
+                guest.check_in(room)
+                print(f"Guest {guest.guest_id} checked into room {room.room_number} from queue.")
+            else:
+                self.check_in_queue.insert(0, guest)  # החזר את האורח לתור אם אין חדר זמין
+                break
+
+
+
+class CheckInEvent(Event):
+    def __init__(self, event_time, guest):
+        super().__init__(event_time, "CheckIn")
+        self.guest = guest
+
+    def handle(self, simulation):
+        """
+        מטפל בתהליך הצ'ק-אין.
+        """
+        # בדיקה אם זמן הצ'ק-אין חוקי (15:00–20:00)
+        if not (15 * 60 <= self.event_time <= 20 * 60):
+            print(f"Check-in not allowed for Guest {self.guest.guest_id} at this time.")
+            return
+
+        # ניסיון להקצות חדר
+        if simulation.allocate_room_to_guest(self.guest):
+            print(f"Guest {self.guest.guest_id} successfully checked into a room.")
+            simulation.statistics["check_ins"] += 1  # עדכון סטטיסטיקות צ'ק-אין
+            self.guest.wait_time = 0  # איפוס זמן המתנה של האורח
+        else:
+            # הוספה לתור המתנה במקרה של כישלון
+            simulation.add_to_waiting_list(self.guest)
+            print(f"No available rooms for Guest {self.guest.guest_id}. Added to waiting list.")
+
+        # עדכון דירוג אם יש עיכוב
+        delay_time = self.event_time - self.guest.arrival_time  # הזמן שעבר מאז הגעת האורח
+        if delay_time > 30:  # מעל חצי שעה
+            simulation.update_rating(-0.02, reason="Delayed check-in")
+
+        # מעקב אחר זמן ההמתנה בתור
+        for waiting_guest in simulation.waiting_list:
+            waiting_guest.wait_time += 30
+            if waiting_guest.wait_time > waiting_guest.max_wait_time:
+                simulation.handle_reneging(waiting_guest)
+
+        # ניסיון לעבד את תור ההמתנה
+        simulation.process_waiting_list()
+
+    def process_waiting_list(self, simulation):
+        """מטפל ברשימת ההמתנה כאשר חדר מתפנה."""
+        for guest in simulation.waiting_list:
+            for room in simulation.rooms:
+                if not room.is_occupied and room.capacity >= guest.group_size:
+                    room.check_in()
+                    guest.check_in(room)
+                    simulation.waiting_list.remove(guest)
+                    print(f"Guest {guest.guest_id} moved from waiting list to room {room.room_id}.")
+                    break
