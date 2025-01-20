@@ -107,6 +107,7 @@ class Room:
         self.occupied = False  # האם החדר תפוס כרגע?
         self.group = None
         self.remaining_days = 0
+        self.price = 0
 
     def check_in(self, group):
         self.occupied = True
@@ -116,6 +117,7 @@ class Room:
     def check_out(self):
         self.occupied = False
         self.group = None
+        self.remaining_days = 0
         print(f"Room {self.room_number} checked out.")
 
 
@@ -162,12 +164,13 @@ class ArrivalEvent(Event):
             if room:
                 room.check_in(group)
                 group.check_in(room)
+                room.price = 250 * group.group_size + (120 if room.suite else 0)
                 room.remaining_days = sample_length_stay_hotel()
                 print(f"Room {room.room_number} checked in for {room.remaining_days} days.")
                 if simulation.is_reception_available():
                     simulation.assign_to_reception(self.time, group, 'checkin')
                 else:
-                    simulation.reception_queue.append((group, 'checkin'))
+                    simulation.reception_queue.append((self.time ,group, 'checkin'))
             else:
                 print("No room available, guest leaves.")
 
@@ -185,7 +188,7 @@ class CheckInEvent(Event):
             #simulation.schedule_event(PoolEvent(self.time))
         simulation.reception_busy -= 1
         if simulation.reception_queue:
-            group, service = simulation.reception_queue.pop(0)
+            time, group, service = simulation.reception_queue.pop(0)
             simulation.assign_to_reception(self.time, group, service)
 
 
@@ -196,7 +199,7 @@ class CheckOutEvent(Event):
         print(f"the group finished check out event at time {simulation.hour(self.time)}")
         simulation.reception_busy -= 1
         if simulation.reception_queue:
-            group, service = simulation.reception_queue.pop(0)
+            time, group, service = simulation.reception_queue.pop(0)
             simulation.assign_to_reception(self.time, group, service)
 
 
@@ -207,7 +210,7 @@ class EndOfDayEvent(Event):
         if next_end_of_day < simulation.simulation_time:
             simulation.schedule_event(EndOfDayEvent(next_end_of_day))
 
-        # איסוף רשימת החדרים התפוסים
+        # איסוף רשימת החדרים התפוסים שצריכים להגיע מחר לארוחת בוקר
         occupied_rooms = [room for room in simulation.hotel.rooms if room.occupied]
 
         # עדכון מספר החדרים הזמינים (לפני שינוי מצב החדרים בצ'ק אאוט)
@@ -221,6 +224,8 @@ class EndOfDayEvent(Event):
                 check_out_tomorrow += 1
                 room.occupied = False
 
+        print(len(occupied_rooms))
+
         # יצירת אירועי תחילת יום לכל החדרים התפוסים
         start_time = self.time + 6.5 * 60
         while occupied_rooms:
@@ -229,7 +234,10 @@ class EndOfDayEvent(Event):
             next_arrival_time = start_time + sample_breakfast_arrival()
             if next_arrival_time < simulation.simulation_time:
                 if random_room.remaining_days == 0 and next_arrival_time % 1440 >= 11 * 60:  # מוודא שמי שצריך לעשות צ'ק אאוט יגיע עד 11 לקבלה
-                    simulation.schedule_event(StartOfDayEvent(self.time + 11 * 60, random_room))
+                    if simulation.is_reception_available():
+                        simulation.assign_to_reception(self.time+11*60, random_room.group, 'checkout')
+                    else:
+                        simulation.reception_queue.append((self.time+11*60, random_room.group, 'checkout'))
                 else:
                     simulation.schedule_event(StartOfDayEvent(next_arrival_time, random_room))
             start_time = next_arrival_time
@@ -248,6 +256,7 @@ class EndOfDayEvent(Event):
         # איפוס ספירת צ'ק אין וצ'ק אאוט ליום הבא
         simulation.completed_checkin = 0
         simulation.completed_checkout = 0
+        simulation.count=0
 
 
 
@@ -258,20 +267,14 @@ class StartOfDayEvent(Event):
 
     def handle(self, simulation):
         if self.room.remaining_days == 0:# אם הם צריכים לעשות צק אאוט היום
-            if self.time % 1440 >= 11*60:
-                if simulation.is_reception_available():
-                    simulation.assign_to_reception(self.time, self.room.group, 'checkout')
-                else:
-                    simulation.reception_queue.append((self.room.group, 'checkout'))
-            else:
                 if simulation.is_breakfast_available(self.room.group):
                     simulation.assign_to_breakfast(self.time, self.room.group, check_out_day=True)
                 else:
                     simulation.breakfast_queue.append((self.room.group, True))
 
-        else: # אם לא צריכים לעשות צק אאוט
+        elif self.room.remaining_days > 0: # אם לא צריכים לעשות צק אאוט
             #אם קמו לפני 11:30 שלח לארוחת בוקר
-            if self.time % 1440 <= 11.5*60:
+            if self.time % 1440 < 11.5*60:
                 if simulation.is_breakfast_available(self.room.group):
                     simulation.assign_to_breakfast(self.time, self.room.group, check_out_day=False)
                 else:
@@ -312,7 +315,7 @@ class BreakfastDepartureEvent2(Event):
         if simulation.is_reception_available():
             simulation.assign_to_reception(self.time, self.group, 'checkout')
         else:
-            simulation.reception_queue.append((self.group, 'checkout'))
+            simulation.reception_queue.append((self.time, self.group, 'checkout'))
 
 
 
@@ -330,6 +333,7 @@ class HotelSimulation:
         print(f"Hotel simulation started with {simulation_time} simulation time.")
         self.completed_checkin = 0
         self.completed_checkout = 0
+        self.count = 0
 
 
     def schedule_event(self, event):
@@ -368,6 +372,7 @@ class HotelSimulation:
 
         if service_type == 'checkout':
             self.reception_busy += 1  # מסמנים שעמדה תפוסה
+            group.room.check_out()
             group.check_out()
             service_time = sample_check_out()  # חישוב זמן השירות
             self.schedule_event(CheckOutEvent(time + service_time))
@@ -381,11 +386,15 @@ class HotelSimulation:
         breakfast_departure_time = time + sample_breakfast_time()
         self.current_breakfast_occupancy += group_size
         if check_out_day:
-            self.schedule_event(BreakfastDepartureEvent2(breakfast_departure_time, group))
+            if breakfast_departure_time % 1440 > 11 * 60:
+                self.schedule_event(BreakfastDepartureEvent2((time // 1440) * 1440 + 11 * 60, group))
+            else:
+                self.schedule_event(BreakfastDepartureEvent2(breakfast_departure_time, group))
         else:
-            self.schedule_event(BreakfastDepartureEvent(breakfast_departure_time, group))
-
-
+            if breakfast_departure_time % 1440 > 11.5 * 60:
+                self.schedule_event(BreakfastDepartureEvent((time // 1440) * 1440 + 11.5 * 60, group))
+            else:
+                self.schedule_event(BreakfastDepartureEvent(breakfast_departure_time, group))
 
 
 
@@ -403,5 +412,5 @@ class HotelSimulation:
 
 
 # יצירת אובייקט סימולציה והרצתה
-simulation = HotelSimulation(simulation_time=7201)
+simulation = HotelSimulation(simulation_time=14401)
 simulation.run()
